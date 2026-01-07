@@ -1,134 +1,43 @@
-name: Claude PR Review
+name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  pull-requests: write
+    types: [opened, synchronize]
 
 jobs:
-  review:
+  claude-review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Get PR diff
-        id: diff
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          # Get the diff between base and head (safe - BASE_REF is from env)
-          git fetch origin "$BASE_REF"
-          DIFF=$(git diff "origin/$BASE_REF"...HEAD -- '*.go' | head -c 50000)
-
-          # Save diff to file to avoid shell escaping issues
-          echo "$DIFF" > /tmp/diff.txt
-
-      - name: Get changed files list
-        id: files
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          FILES=$(git diff --name-only "origin/$BASE_REF"...HEAD -- '*.go' | tr '\n' ', ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-
-      - name: Claude Review
-        id: claude
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CHANGED_FILES: ${{ steps.files.outputs.files }}
-        run: |
-          # Read diff from file
-          DIFF=$(cat /tmp/diff.txt)
-
-          # Create the prompt
-          cat > /tmp/prompt.txt << 'PROMPT_END'
-          You are a senior Go developer reviewing a pull request for a Trakt.tv MCP server.
-
-          Review the following code changes and provide:
-          1. **Summary**: Brief description of what the changes do
-          2. **Potential Issues**: Any bugs, security issues, or problems (be specific with file:line references)
-          3. **Suggestions**: Improvements for code quality, performance, or maintainability
-          4. **Rating**: Overall assessment (Approve / Request Changes / Comment)
-
-          Focus on:
-          - Go best practices and idioms
-          - Error handling
-          - Concurrency safety
-          - Security (no credential leaks, proper input validation)
-          - Test coverage gaps
-
-          Keep your review concise and actionable. Use markdown formatting.
-          PROMPT_END
-
-          echo "" >> /tmp/prompt.txt
-          echo "Changed files: $CHANGED_FILES" >> /tmp/prompt.txt
-          echo "" >> /tmp/prompt.txt
-          echo "Diff:" >> /tmp/prompt.txt
-          echo "$DIFF" >> /tmp/prompt.txt
-
-          # Create JSON payload
-          jq -n --rawfile prompt /tmp/prompt.txt '{
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 2048,
-            messages: [{role: "user", content: $prompt}]
-          }' > /tmp/payload.json
-
-          # Call Claude API
-          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -d @/tmp/payload.json)
-
-          # Extract the text content and save to file
-          echo "$RESPONSE" | jq -r '.content[0].text // "Error: Could not get review. Check ANTHROPIC_API_KEY secret."' > review.md
-
-      - name: Post Review Comment
-        uses: actions/github-script@v7
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
         with:
-          script: |
-            const fs = require('fs');
-            const review = fs.readFileSync('review.md', 'utf8');
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
-            const body = `## 🤖 Claude Code Review
+            Please review this pull request for a Go-based Trakt.tv MCP server and provide feedback on:
+            - Go best practices and idioms
+            - Potential bugs or issues
+            - Error handling
+            - Concurrency safety
+            - Security concerns (no credential leaks, proper input validation)
+            - Test coverage
 
-            ${review}
+            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
 
-            ---
-            *Automated review by Claude Sonnet 4*`;
+            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
 
-            // Find existing bot comment to update
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const botComment = comments.find(c =>
-              c.body.includes('Claude Code Review') &&
-              c.user.type === 'Bot'
-            );
-
-            if (botComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: body
-              });
-            }
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
