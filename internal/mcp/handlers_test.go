@@ -227,14 +227,28 @@ func TestLogWatchHandler_InvalidSeasonEpisode(t *testing.T) {
 	handler := server.handlers["log_watch"]
 	server.mu.RUnlock()
 
-	// Episode with invalid season/episode numbers
-	result, err := handler(context.Background(), json.RawMessage(`{"type":"episode","showName":"Test","season":0,"episode":0}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Test cases for invalid season/episode validation
+	// Note: season 0 is valid (specials), but episode must be > 0
+	tests := []struct {
+		name string
+		args string
+	}{
+		{"negative season", `{"type":"episode","showName":"Test","season":-1,"episode":1}`},
+		{"zero episode", `{"type":"episode","showName":"Test","season":1,"episode":0}`},
+		{"negative episode", `{"type":"episode","showName":"Test","season":1,"episode":-1}`},
 	}
 
-	if !result.IsError {
-		t.Error("expected error result for invalid season/episode")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := handler(context.Background(), json.RawMessage(tc.args))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !result.IsError {
+				t.Error("expected error result for invalid season/episode")
+			}
+		})
 	}
 }
 

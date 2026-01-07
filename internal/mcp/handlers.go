@@ -4,9 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/kofifort/trakt-mcp-go/internal/trakt"
 )
+
+// exactMatchScoreThreshold is the minimum score for a search result to be considered
+// an exact match. Below this threshold, multiple results are considered ambiguous
+// and require user disambiguation. Trakt API scores exact title matches at 1000+.
+const exactMatchScoreThreshold = 1000
 
 // RegisterTools registers all Trakt tools with the MCP server.
 func RegisterTools(s *Server, client *trakt.Client) {
@@ -283,6 +289,33 @@ func makeLogWatchHandler(client *trakt.Client) ToolHandler {
 	}
 }
 
+// formatDisambiguationMessage builds a message listing multiple search results
+// for user disambiguation. Uses strings.Builder for efficient string concatenation.
+func formatDisambiguationMessage(contentType string, query string, results []trakt.SearchResult) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Multiple %ss found for '%s'. Please be more specific or use the year:\n", contentType, query))
+
+	for i, r := range results {
+		if i >= 5 {
+			sb.WriteString(fmt.Sprintf("... and %d more\n", len(results)-5))
+			break
+		}
+		switch contentType {
+		case "show":
+			if r.Show != nil {
+				sb.WriteString(fmt.Sprintf("• %s (%d) - Trakt ID: %d\n", r.Show.Title, r.Show.Year, r.Show.IDs.Trakt))
+			}
+		case "movie":
+			if r.Movie != nil {
+				sb.WriteString(fmt.Sprintf("• %s (%d) - Trakt ID: %d\n", r.Movie.Title, r.Movie.Year, r.Movie.IDs.Trakt))
+			}
+		}
+	}
+	return sb.String()
+}
+
+// logEpisode searches for a show by name, verifies the episode exists,
+// and logs it to watch history. Returns disambiguation prompt if multiple shows match.
 func logEpisode(ctx context.Context, client *trakt.Client, showName string, season, episode int, watchedAt string) (ToolCallResult, error) {
 	if showName == "" {
 		return ToolCallResult{
@@ -310,20 +343,9 @@ func logEpisode(ctx context.Context, client *trakt.Client, showName string, seas
 		}, nil
 	}
 
-	// Check for ambiguous results
-	if len(results) > 1 && results[0].Score < 1000 {
-		// Multiple matches with no clear winner - ask user to disambiguate
-		var msg string
-		msg = fmt.Sprintf("Multiple shows found for '%s'. Please be more specific or use the year:\n", showName)
-		for i, r := range results {
-			if i >= 5 {
-				msg += fmt.Sprintf("... and %d more\n", len(results)-5)
-				break
-			}
-			if r.Show != nil {
-				msg += fmt.Sprintf("• %s (%d) - Trakt ID: %d\n", r.Show.Title, r.Show.Year, r.Show.IDs.Trakt)
-			}
-		}
+	// Check for ambiguous results - require exact match or single result
+	if len(results) > 1 && results[0].Score < exactMatchScoreThreshold {
+		msg := formatDisambiguationMessage("show", showName, results)
 		return ToolCallResult{
 			Content: []Content{TextContent(msg)},
 			IsError: true,
@@ -335,8 +357,9 @@ func logEpisode(ctx context.Context, client *trakt.Client, showName string, seas
 	// Get the episode to verify it exists and get its ID
 	ep, err := client.GetEpisode(ctx, fmt.Sprintf("%d", show.IDs.Trakt), season, episode)
 	if err != nil {
+		// Include underlying error for debugging (network vs not found)
 		return ToolCallResult{
-			Content: []Content{TextContent(fmt.Sprintf("Episode S%02dE%02d not found for %s", season, episode, show.Title))},
+			Content: []Content{TextContent(fmt.Sprintf("Episode S%02dE%02d not found for %s: %v", season, episode, show.Title, err))},
 			IsError: true,
 		}, nil
 	}
@@ -375,6 +398,8 @@ func logEpisode(ctx context.Context, client *trakt.Client, showName string, seas
 	}, nil
 }
 
+// logMovie searches for a movie by name and logs it to watch history.
+// Returns disambiguation prompt if multiple movies match the query.
 func logMovie(ctx context.Context, client *trakt.Client, movieName string, watchedAt string) (ToolCallResult, error) {
 	if movieName == "" {
 		return ToolCallResult{
@@ -395,19 +420,9 @@ func logMovie(ctx context.Context, client *trakt.Client, movieName string, watch
 		}, nil
 	}
 
-	// Check for ambiguous results
-	if len(results) > 1 && results[0].Score < 1000 {
-		var msg string
-		msg = fmt.Sprintf("Multiple movies found for '%s'. Please be more specific or use the year:\n", movieName)
-		for i, r := range results {
-			if i >= 5 {
-				msg += fmt.Sprintf("... and %d more\n", len(results)-5)
-				break
-			}
-			if r.Movie != nil {
-				msg += fmt.Sprintf("• %s (%d) - Trakt ID: %d\n", r.Movie.Title, r.Movie.Year, r.Movie.IDs.Trakt)
-			}
-		}
+	// Check for ambiguous results - require exact match or single result
+	if len(results) > 1 && results[0].Score < exactMatchScoreThreshold {
+		msg := formatDisambiguationMessage("movie", movieName, results)
 		return ToolCallResult{
 			Content: []Content{TextContent(msg)},
 			IsError: true,
