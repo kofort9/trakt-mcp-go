@@ -63,6 +63,7 @@ type Client struct {
 	config     Config
 	httpClient *http.Client
 	logger     *slog.Logger
+	baseURL    string // defaults to BaseURL, can be overridden for testing
 }
 
 // NewClient creates a new Trakt API client.
@@ -75,7 +76,8 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
-		logger: logger,
+		logger:  logger,
+		baseURL: BaseURL,
 	}
 }
 
@@ -87,6 +89,11 @@ func (c *Client) IsConfigured() bool {
 // IsAuthenticated returns true if the client has an access token.
 func (c *Client) IsAuthenticated() bool {
 	return c.config.AccessToken != ""
+}
+
+// SetBaseURL sets the base URL for API requests. Used for testing.
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = url
 }
 
 // Search searches for shows or movies.
@@ -236,7 +243,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, BaseURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

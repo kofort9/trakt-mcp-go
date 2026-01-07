@@ -3,6 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kofifort/trakt-mcp-go/internal/trakt"
@@ -260,5 +263,534 @@ func TestErrorContent(t *testing.T) {
 
 	if result.Content[0].Type != "text" {
 		t.Error("content type should be text")
+	}
+}
+
+// Integration tests with mock Trakt server
+
+func newMockTraktServer(t *testing.T, handler http.Handler) (*httptest.Server, *trakt.Client) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	client := trakt.NewClient(trakt.Config{
+		ClientID:    "test-client-id",
+		AccessToken: "test-token",
+	}, nil)
+	client.SetBaseURL(server.URL)
+
+	return server, client
+}
+
+func TestSearchHandler_Success(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		results := []trakt.SearchResult{
+			{
+				Type:  "show",
+				Score: 1000,
+				Show: &trakt.Show{
+					Title: "Breaking Bad",
+					Year:  2008,
+					IDs:   trakt.ShowIDs{Trakt: 1388},
+				},
+			},
+			{
+				Type:  "movie",
+				Score: 500,
+				Movie: &trakt.Movie{
+					Title: "Breaking Bad Movie",
+					Year:  2019,
+					IDs:   trakt.MovieIDs{Trakt: 12345},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(results)
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	searchHandler := server.handlers["search_show"]
+	server.mu.RUnlock()
+
+	result, err := searchHandler(context.Background(), json.RawMessage(`{"query":"breaking bad"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("unexpected error result: %s", result.Content[0].Text)
+	}
+
+	if len(result.Content) == 0 {
+		t.Fatal("expected content in result")
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Breaking Bad") {
+		t.Errorf("expected 'Breaking Bad' in result, got: %s", text)
+	}
+	if !strings.Contains(text, "1388") {
+		t.Errorf("expected Trakt ID '1388' in result, got: %s", text)
+	}
+}
+
+func TestSearchHandler_NoResults(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]trakt.SearchResult{})
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	searchHandler := server.handlers["search_show"]
+	server.mu.RUnlock()
+
+	result, err := searchHandler(context.Background(), json.RawMessage(`{"query":"nonexistent show xyz"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Error("no results should not be an error")
+	}
+
+	if !strings.Contains(result.Content[0].Text, "No results found") {
+		t.Errorf("expected 'No results found', got: %s", result.Content[0].Text)
+	}
+}
+
+func TestGetHistoryHandler_Success(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		history := []trakt.HistoryItem{
+			{
+				Type: "episode",
+				Show: &trakt.Show{Title: "Breaking Bad"},
+				Episode: &trakt.Episode{
+					Title:  "Pilot",
+					Season: 1,
+					Number: 1,
+				},
+			},
+			{
+				Type:  "movie",
+				Movie: &trakt.Movie{Title: "Inception"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(history)
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	historyHandler := server.handlers["get_history"]
+	server.mu.RUnlock()
+
+	result, err := historyHandler(context.Background(), json.RawMessage(`{"limit":10}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("unexpected error result: %s", result.Content[0].Text)
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Breaking Bad") {
+		t.Errorf("expected 'Breaking Bad' in result, got: %s", text)
+	}
+	if !strings.Contains(text, "S01E01") {
+		t.Errorf("expected 'S01E01' in result, got: %s", text)
+	}
+}
+
+func TestGetHistoryHandler_Empty(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]trakt.HistoryItem{})
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	historyHandler := server.handlers["get_history"]
+	server.mu.RUnlock()
+
+	result, err := historyHandler(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Error("empty history should not be an error")
+	}
+
+	if !strings.Contains(result.Content[0].Text, "No watch history") {
+		t.Errorf("expected 'No watch history', got: %s", result.Content[0].Text)
+	}
+}
+
+func TestGetHistoryHandler_InvalidArgs(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	historyHandler := server.handlers["get_history"]
+	server.mu.RUnlock()
+
+	result, err := historyHandler(context.Background(), json.RawMessage(`{invalid`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestAuthenticateHandler_Success(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		code := trakt.DeviceCode{
+			DeviceCode:      "device123",
+			UserCode:        "ABCD1234",
+			VerificationURL: "https://trakt.tv/activate",
+			ExpiresIn:       600,
+			Interval:        5,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(code)
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	authHandler := server.handlers["authenticate"]
+	server.mu.RUnlock()
+
+	result, err := authHandler(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("unexpected error result: %s", result.Content[0].Text)
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "ABCD1234") {
+		t.Errorf("expected user code 'ABCD1234' in result, got: %s", text)
+	}
+	if !strings.Contains(text, "trakt.tv/activate") {
+		t.Errorf("expected verification URL in result, got: %s", text)
+	}
+}
+
+func TestLogWatchHandler_EpisodeSuccess(t *testing.T) {
+	requestCount := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			// Search for show
+			results := []trakt.SearchResult{
+				{
+					Type:  "show",
+					Score: 1000,
+					Show: &trakt.Show{
+						Title: "Breaking Bad",
+						Year:  2008,
+						IDs:   trakt.ShowIDs{Trakt: 1388},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(results)
+
+		case strings.Contains(r.URL.Path, "/episodes/"):
+			// Get episode
+			ep := trakt.Episode{
+				Title:  "Pilot",
+				Season: 1,
+				Number: 1,
+				IDs:    trakt.EpisodeIDs{Trakt: 62085},
+			}
+			_ = json.NewEncoder(w).Encode(ep)
+
+		case r.URL.Path == "/sync/history":
+			// Add to history
+			resp := trakt.SyncResponse{
+				Added: struct {
+					Movies   int `json:"movies"`
+					Episodes int `json:"episodes"`
+				}{Episodes: 1},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	logHandler := server.handlers["log_watch"]
+	server.mu.RUnlock()
+
+	result, err := logHandler(context.Background(), json.RawMessage(`{
+		"type": "episode",
+		"showName": "Breaking Bad",
+		"season": 1,
+		"episode": 1
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("unexpected error result: %s", result.Content[0].Text)
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Logged") || !strings.Contains(text, "Breaking Bad") {
+		t.Errorf("expected success message with show name, got: %s", text)
+	}
+}
+
+func TestLogWatchHandler_MovieSuccess(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			results := []trakt.SearchResult{
+				{
+					Type:  "movie",
+					Score: 1000,
+					Movie: &trakt.Movie{
+						Title: "Inception",
+						Year:  2010,
+						IDs:   trakt.MovieIDs{Trakt: 16662},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(results)
+
+		case r.URL.Path == "/sync/history":
+			resp := trakt.SyncResponse{
+				Added: struct {
+					Movies   int `json:"movies"`
+					Episodes int `json:"episodes"`
+				}{Movies: 1},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	logHandler := server.handlers["log_watch"]
+	server.mu.RUnlock()
+
+	result, err := logHandler(context.Background(), json.RawMessage(`{
+		"type": "movie",
+		"movieName": "Inception"
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("unexpected error result: %s", result.Content[0].Text)
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Logged") || !strings.Contains(text, "Inception") {
+		t.Errorf("expected success message with movie name, got: %s", text)
+	}
+}
+
+func TestLogWatchHandler_EpisodeAlreadyWatched(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			results := []trakt.SearchResult{
+				{
+					Type:  "show",
+					Score: 1000,
+					Show: &trakt.Show{
+						Title: "Breaking Bad",
+						Year:  2008,
+						IDs:   trakt.ShowIDs{Trakt: 1388},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(results)
+
+		case strings.Contains(r.URL.Path, "/episodes/"):
+			ep := trakt.Episode{
+				Title:  "Pilot",
+				Season: 1,
+				Number: 1,
+				IDs:    trakt.EpisodeIDs{Trakt: 62085},
+			}
+			_ = json.NewEncoder(w).Encode(ep)
+
+		case r.URL.Path == "/sync/history":
+			// Already watched - existing count > 0
+			resp := trakt.SyncResponse{
+				Existing: struct {
+					Movies   int `json:"movies"`
+					Episodes int `json:"episodes"`
+				}{Episodes: 1},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	logHandler := server.handlers["log_watch"]
+	server.mu.RUnlock()
+
+	result, err := logHandler(context.Background(), json.RawMessage(`{
+		"type": "episode",
+		"showName": "Breaking Bad",
+		"season": 1,
+		"episode": 1
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		t.Error("already watched should not be an error")
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Already watched") {
+		t.Errorf("expected 'Already watched' message, got: %s", text)
+	}
+}
+
+func TestLogWatchHandler_ShowNotFound(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]trakt.SearchResult{})
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	logHandler := server.handlers["log_watch"]
+	server.mu.RUnlock()
+
+	result, err := logHandler(context.Background(), json.RawMessage(`{
+		"type": "episode",
+		"showName": "Nonexistent Show XYZ",
+		"season": 1,
+		"episode": 1
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("expected error for show not found")
+	}
+
+	if !strings.Contains(result.Content[0].Text, "No show found") {
+		t.Errorf("expected 'No show found' message, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestLogWatchHandler_AmbiguousShow(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Multiple results with low scores - ambiguous
+		results := []trakt.SearchResult{
+			{
+				Type:  "show",
+				Score: 500,
+				Show: &trakt.Show{
+					Title: "Lost",
+					Year:  2004,
+					IDs:   trakt.ShowIDs{Trakt: 73},
+				},
+			},
+			{
+				Type:  "show",
+				Score: 450,
+				Show: &trakt.Show{
+					Title: "Lost in Space",
+					Year:  2018,
+					IDs:   trakt.ShowIDs{Trakt: 117523},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(results)
+	})
+
+	_, client := newMockTraktServer(t, handler)
+
+	server := NewServer(nil)
+	RegisterTools(server, client)
+
+	server.mu.RLock()
+	logHandler := server.handlers["log_watch"]
+	server.mu.RUnlock()
+
+	result, err := logHandler(context.Background(), json.RawMessage(`{
+		"type": "episode",
+		"showName": "Lost",
+		"season": 1,
+		"episode": 1
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("expected error for ambiguous show")
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Multiple shows found") {
+		t.Errorf("expected disambiguation message, got: %s", text)
 	}
 }
