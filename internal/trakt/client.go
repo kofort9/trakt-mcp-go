@@ -63,6 +63,7 @@ type Client struct {
 	config     Config
 	httpClient *http.Client
 	logger     *slog.Logger
+	baseURL    string // defaults to BaseURL, can be overridden for testing
 }
 
 // NewClient creates a new Trakt API client.
@@ -75,7 +76,8 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
-		logger: logger,
+		logger:  logger,
+		baseURL: BaseURL,
 	}
 }
 
@@ -87,6 +89,11 @@ func (c *Client) IsConfigured() bool {
 // IsAuthenticated returns true if the client has an access token.
 func (c *Client) IsAuthenticated() bool {
 	return c.config.AccessToken != ""
+}
+
+// SetBaseURL sets the base URL for API requests. Used for testing.
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = url
 }
 
 // Search searches for shows or movies.
@@ -150,6 +157,42 @@ func (c *Client) RemoveFromHistory(ctx context.Context, item WatchedItem) (*Sync
 	return &resp, nil
 }
 
+// GetShow retrieves a show by Trakt ID or slug.
+func (c *Client) GetShow(ctx context.Context, id string) (*Show, error) {
+	path := fmt.Sprintf("/shows/%s", id)
+
+	var show Show
+	if err := c.get(ctx, path, &show); err != nil {
+		return nil, err
+	}
+
+	return &show, nil
+}
+
+// GetEpisode retrieves a specific episode of a show.
+func (c *Client) GetEpisode(ctx context.Context, showID string, season, episode int) (*Episode, error) {
+	path := fmt.Sprintf("/shows/%s/seasons/%d/episodes/%d", showID, season, episode)
+
+	var ep Episode
+	if err := c.get(ctx, path, &ep); err != nil {
+		return nil, err
+	}
+
+	return &ep, nil
+}
+
+// GetMovie retrieves a movie by Trakt ID or slug.
+func (c *Client) GetMovie(ctx context.Context, id string) (*Movie, error) {
+	path := fmt.Sprintf("/movies/%s", id)
+
+	var movie Movie
+	if err := c.get(ctx, path, &movie); err != nil {
+		return nil, err
+	}
+
+	return &movie, nil
+}
+
 // GetDeviceCode initiates device authentication.
 func (c *Client) GetDeviceCode(ctx context.Context) (*DeviceCode, error) {
 	body := map[string]string{
@@ -200,7 +243,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, BaseURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
