@@ -150,6 +150,42 @@ func (c *Client) RemoveFromHistory(ctx context.Context, item WatchedItem) (*Sync
 	return &resp, nil
 }
 
+// GetShow retrieves a show by Trakt ID or slug.
+func (c *Client) GetShow(ctx context.Context, id string) (*Show, error) {
+	path := fmt.Sprintf("/shows/%s", id)
+
+	var show Show
+	if err := c.get(ctx, path, &show); err != nil {
+		return nil, err
+	}
+
+	return &show, nil
+}
+
+// GetEpisode retrieves a specific episode of a show.
+func (c *Client) GetEpisode(ctx context.Context, showID string, season, episode int) (*Episode, error) {
+	path := fmt.Sprintf("/shows/%s/seasons/%d/episodes/%d", showID, season, episode)
+
+	var ep Episode
+	if err := c.get(ctx, path, &ep); err != nil {
+		return nil, err
+	}
+
+	return &ep, nil
+}
+
+// GetMovie retrieves a movie by Trakt ID or slug.
+func (c *Client) GetMovie(ctx context.Context, id string) (*Movie, error) {
+	path := fmt.Sprintf("/movies/%s", id)
+
+	var movie Movie
+	if err := c.get(ctx, path, &movie); err != nil {
+		return nil, err
+	}
+
+	return &movie, nil
+}
+
 // GetDeviceCode initiates device authentication.
 func (c *Client) GetDeviceCode(ctx context.Context) (*DeviceCode, error) {
 	body := map[string]string{

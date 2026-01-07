@@ -269,9 +269,183 @@ func makeLogWatchHandler(client *trakt.Client) ToolHandler {
 			return ErrorContent(fmt.Errorf("invalid arguments: %w", err)), nil
 		}
 
-		// For now, return a stub - full implementation requires search + sync
+		switch a.Type {
+		case "episode":
+			return logEpisode(ctx, client, a.ShowName, a.Season, a.Episode, a.WatchedAt)
+		case "movie":
+			return logMovie(ctx, client, a.MovieName, a.WatchedAt)
+		default:
+			return ToolCallResult{
+				Content: []Content{TextContent("Error: type must be 'episode' or 'movie'")},
+				IsError: true,
+			}, nil
+		}
+	}
+}
+
+func logEpisode(ctx context.Context, client *trakt.Client, showName string, season, episode int, watchedAt string) (ToolCallResult, error) {
+	if showName == "" {
 		return ToolCallResult{
-			Content: []Content{TextContent(fmt.Sprintf("🚧 log_watch for %s not yet fully implemented", a.Type))},
+			Content: []Content{TextContent("Error: showName is required for episodes")},
+			IsError: true,
 		}, nil
 	}
+	// Season 0 is valid (specials), but episode must be positive
+	if season < 0 || episode <= 0 {
+		return ToolCallResult{
+			Content: []Content{TextContent("Error: season must be >= 0 and episode must be positive")},
+			IsError: true,
+		}, nil
+	}
+
+	// Search for the show
+	results, err := client.Search(ctx, showName, "show")
+	if err != nil {
+		return ErrorContent(err), nil
+	}
+	if len(results) == 0 || results[0].Show == nil {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("No show found for: %s", showName))},
+			IsError: true,
+		}, nil
+	}
+
+	// Check for ambiguous results
+	if len(results) > 1 && results[0].Score < 1000 {
+		// Multiple matches with no clear winner - ask user to disambiguate
+		var msg string
+		msg = fmt.Sprintf("Multiple shows found for '%s'. Please be more specific or use the year:\n", showName)
+		for i, r := range results {
+			if i >= 5 {
+				msg += fmt.Sprintf("... and %d more\n", len(results)-5)
+				break
+			}
+			if r.Show != nil {
+				msg += fmt.Sprintf("• %s (%d) - Trakt ID: %d\n", r.Show.Title, r.Show.Year, r.Show.IDs.Trakt)
+			}
+		}
+		return ToolCallResult{
+			Content: []Content{TextContent(msg)},
+			IsError: true,
+		}, nil
+	}
+
+	show := results[0].Show
+
+	// Get the episode to verify it exists and get its ID
+	ep, err := client.GetEpisode(ctx, fmt.Sprintf("%d", show.IDs.Trakt), season, episode)
+	if err != nil {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("Episode S%02dE%02d not found for %s", season, episode, show.Title))},
+			IsError: true,
+		}, nil
+	}
+
+	// Sync to history
+	item := trakt.WatchedItem{
+		WatchedAt: watchedAt,
+		Episodes: []trakt.Episode{
+			{
+				IDs: trakt.EpisodeIDs{Trakt: ep.IDs.Trakt},
+			},
+		},
+	}
+
+	resp, err := client.AddToHistory(ctx, item)
+	if err != nil {
+		return ErrorContent(err), nil
+	}
+
+	if resp.Added.Episodes > 0 {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("✅ Logged: **%s** S%02dE%02d - %s",
+				show.Title, season, episode, ep.Title))},
+		}, nil
+	}
+
+	if resp.Existing.Episodes > 0 {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("ℹ️ Already watched: **%s** S%02dE%02d - %s",
+				show.Title, season, episode, ep.Title))},
+		}, nil
+	}
+
+	return ToolCallResult{
+		Content: []Content{TextContent("⚠️ Episode was not added (unknown reason)")},
+	}, nil
+}
+
+func logMovie(ctx context.Context, client *trakt.Client, movieName string, watchedAt string) (ToolCallResult, error) {
+	if movieName == "" {
+		return ToolCallResult{
+			Content: []Content{TextContent("Error: movieName is required for movies")},
+			IsError: true,
+		}, nil
+	}
+
+	// Search for the movie
+	results, err := client.Search(ctx, movieName, "movie")
+	if err != nil {
+		return ErrorContent(err), nil
+	}
+	if len(results) == 0 || results[0].Movie == nil {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("No movie found for: %s", movieName))},
+			IsError: true,
+		}, nil
+	}
+
+	// Check for ambiguous results
+	if len(results) > 1 && results[0].Score < 1000 {
+		var msg string
+		msg = fmt.Sprintf("Multiple movies found for '%s'. Please be more specific or use the year:\n", movieName)
+		for i, r := range results {
+			if i >= 5 {
+				msg += fmt.Sprintf("... and %d more\n", len(results)-5)
+				break
+			}
+			if r.Movie != nil {
+				msg += fmt.Sprintf("• %s (%d) - Trakt ID: %d\n", r.Movie.Title, r.Movie.Year, r.Movie.IDs.Trakt)
+			}
+		}
+		return ToolCallResult{
+			Content: []Content{TextContent(msg)},
+			IsError: true,
+		}, nil
+	}
+
+	movie := results[0].Movie
+
+	// Sync to history
+	item := trakt.WatchedItem{
+		WatchedAt: watchedAt,
+		Movies: []trakt.Movie{
+			{
+				IDs: trakt.MovieIDs{Trakt: movie.IDs.Trakt},
+			},
+		},
+	}
+
+	resp, err := client.AddToHistory(ctx, item)
+	if err != nil {
+		return ErrorContent(err), nil
+	}
+
+	if resp.Added.Movies > 0 {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("✅ Logged: **%s** (%d)",
+				movie.Title, movie.Year))},
+		}, nil
+	}
+
+	if resp.Existing.Movies > 0 {
+		return ToolCallResult{
+			Content: []Content{TextContent(fmt.Sprintf("ℹ️ Already watched: **%s** (%d)",
+				movie.Title, movie.Year))},
+		}, nil
+	}
+
+	return ToolCallResult{
+		Content: []Content{TextContent("⚠️ Movie was not added (unknown reason)")},
+	}, nil
 }
