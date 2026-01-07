@@ -19,7 +19,7 @@ func TestServer_Initialize(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		server.RunWithIO(ctx, strings.NewReader(input+"\n"), &buf)
+		_ = server.RunWithIO(ctx, strings.NewReader(input+"\n"), &buf)
 		close(done)
 	}()
 
@@ -68,7 +68,7 @@ func TestServer_ToolsList(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		server.RunWithIO(ctx, strings.NewReader(input), &buf)
+		_ = server.RunWithIO(ctx, strings.NewReader(input), &buf)
 		close(done)
 	}()
 
@@ -128,7 +128,7 @@ func TestServer_ToolsCall(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		server.RunWithIO(ctx, strings.NewReader(input), &buf)
+		_ = server.RunWithIO(ctx, strings.NewReader(input), &buf)
 		close(done)
 	}()
 
@@ -160,7 +160,7 @@ func TestServer_MethodNotFound(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		server.RunWithIO(ctx, strings.NewReader(input+"\n"), &buf)
+		_ = server.RunWithIO(ctx, strings.NewReader(input+"\n"), &buf)
 		close(done)
 	}()
 
@@ -191,7 +191,7 @@ func TestServer_InvalidJSON(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		server.RunWithIO(ctx, strings.NewReader(input+"\n"), &buf)
+		_ = server.RunWithIO(ctx, strings.NewReader(input+"\n"), &buf)
 		close(done)
 	}()
 
@@ -231,7 +231,7 @@ func TestServer_UninitializedToolCall(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		server.RunWithIO(ctx, strings.NewReader(callReq+"\n"), &buf)
+		_ = server.RunWithIO(ctx, strings.NewReader(callReq+"\n"), &buf)
 		close(done)
 	}()
 

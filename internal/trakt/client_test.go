@@ -8,20 +8,6 @@ import (
 	"testing"
 )
 
-// testClient creates a client pointing at a test server
-func testClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
-	t.Helper()
-	server := httptest.NewServer(handler)
-
-	client := NewClient(Config{
-		ClientID:    "test-client-id",
-		AccessToken: "test-token",
-	}, nil)
-
-	// Override the base URL by modifying the HTTP client's transport
-	// This is a bit hacky but works for testing
-	return client, server
-}
 
 func TestClient_Search_MockServer(t *testing.T) {
 	// Return mock search results
@@ -37,7 +23,7 @@ func TestClient_Search_MockServer(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(results)
+		_ = json.NewEncoder(w).Encode(results)
 	})
 
 	server := httptest.NewServer(handler)
@@ -225,7 +211,7 @@ func TestClient_NewClient(t *testing.T) {
 func TestClient_HTTPErrorHandling(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"unauthorized"}`))
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	})
 
 	server := httptest.NewServer(handler)
