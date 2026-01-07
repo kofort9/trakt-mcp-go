@@ -357,9 +357,9 @@ func logEpisode(ctx context.Context, client *trakt.Client, showName string, seas
 	// Get the episode to verify it exists and get its ID
 	ep, err := client.GetEpisode(ctx, fmt.Sprintf("%d", show.IDs.Trakt), season, episode)
 	if err != nil {
-		// Include underlying error for debugging (network vs not found)
+		// User-friendly message (don't expose internal error details)
 		return ToolCallResult{
-			Content: []Content{TextContent(fmt.Sprintf("Episode S%02dE%02d not found for %s: %v", season, episode, show.Title, err))},
+			Content: []Content{TextContent(fmt.Sprintf("Episode S%02dE%02d not found for %s. Please verify the season and episode numbers.", season, episode, show.Title))},
 			IsError: true,
 		}, nil
 	}

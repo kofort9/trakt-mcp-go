@@ -521,9 +521,7 @@ func TestAuthenticateHandler_Success(t *testing.T) {
 }
 
 func TestLogWatchHandler_EpisodeSuccess(t *testing.T) {
-	requestCount := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
