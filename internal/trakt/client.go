@@ -19,6 +19,27 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
+// APIError represents an error from the Trakt API.
+type APIError struct {
+	StatusCode int
+	Method     string
+	Path       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("trakt API error: %s %s returned status %d", e.Method, e.Path, e.StatusCode)
+}
+
+// IsAuthError returns true if this is an authentication error.
+func (e *APIError) IsAuthError() bool {
+	return e.StatusCode == 401 || e.StatusCode == 403
+}
+
+// IsRateLimited returns true if this is a rate limit error.
+func (e *APIError) IsRateLimited() bool {
+	return e.StatusCode == 429
+}
+
 // Config holds the Trakt API configuration.
 type Config struct {
 	ClientID     string
@@ -207,11 +228,14 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 	}
 
 	if resp.StatusCode >= 400 {
-		c.logger.Error("trakt error",
+		// Log error without sensitive response body details
+		c.logger.Error("trakt API error",
 			"status", resp.StatusCode,
-			"body", string(respBody),
+			"method", method,
+			"path", path,
 		)
-		return fmt.Errorf("trakt API error: %s (status %d)", string(respBody), resp.StatusCode)
+		// Return sanitized error - don't leak response body which may contain tokens
+		return &APIError{StatusCode: resp.StatusCode, Method: method, Path: path}
 	}
 
 	if result != nil && len(respBody) > 0 {

@@ -184,6 +184,14 @@ func (s *Server) handleToolsList() (*ToolsListResult, *Error) {
 }
 
 func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (*ToolCallResult, *Error) {
+	// Verify server is initialized before handling tool calls
+	s.mu.RLock()
+	initialized := s.initialized
+	s.mu.RUnlock()
+	if !initialized {
+		return nil, &Error{Code: InternalError, Message: "Server not initialized"}
+	}
+
 	var p ToolCallParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, &Error{Code: InvalidParams, Message: "Invalid tools/call params"}
